@@ -6,6 +6,7 @@
 <title>Myanmar Fire Hotspots — Satellite Monitoring Dashboard</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -40,11 +41,8 @@
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
     z-index: 1;
-    background: #0a0e17;
+    background: #f2f2f2;
   }
-
-  /* Dark map tiles override */
-  .leaflet-tile-pane { filter: brightness(0.7) contrast(1.2) saturate(0.8); }
   .leaflet-control-attribution { display: none !important; }
 
   /* ── Header Bar ── */
@@ -386,6 +384,22 @@
   .popup-label { color: var(--text-muted); }
   .popup-val { color: var(--text-primary); font-weight: 600; }
 
+  /* ── Region tooltip ── */
+  .region-tooltip {
+    background: rgba(17, 24, 39, 0.85) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 4px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 11px !important;
+    padding: 4px 8px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+  }
+
+  .region-tooltip::before {
+    border-top-color: rgba(17, 24, 39, 0.85) !important;
+  }
+
   /* ── Responsive ── */
   @media (max-width: 768px) {
     .stats-panel { top: 70px; right: 8px; }
@@ -451,6 +465,14 @@
     <div class="legend-item"><div class="legend-dot" style="background:#ff4d1c;box-shadow:0 0 8px rgba(255,77,28,0.5)"></div> High (50–100 MW)</div>
     <div class="legend-item"><div class="legend-dot" style="background:#ff1744;box-shadow:0 0 10px rgba(255,23,68,0.6)"></div> Extreme (&gt; 100 MW)</div>
   </div>
+  <div class="legend-title" style="margin-top:12px">Heatmap Density</div>
+  <div class="legend-items">
+    <div class="legend-item"><div class="legend-dot" style="background:linear-gradient(90deg,#ffffb2,#fd8d3c,#bd0026);width:60px;border-radius:3px;height:10px"></div> Low → High</div>
+  </div>
+  <div class="legend-title" style="margin-top:12px">Boundaries</div>
+  <div class="legend-items">
+    <div class="legend-item"><div style="width:24px;height:0;border-top:2px solid #4a5568;flex-shrink:0"></div> State / Region</div>
+  </div>
 </div>
 
 <!-- Controls -->
@@ -481,29 +503,37 @@ const map = L.map('map', {
 
 L.control.zoom({ position: 'topright' }).addTo(map);
 
-// Dark tile layer
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+// Light tile layer (CartoDB Positron)
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   maxZoom: 18,
   subdomains: 'abcd'
 }).addTo(map);
 
-// Myanmar approximate border outline
-const myanmarBorder = L.polyline([
-  [28.5, 97.3], [27.1, 97.0], [26.0, 97.5], [25.5, 98.5],
-  [24.0, 97.8], [23.5, 98.5], [22.5, 98.9], [21.5, 99.0],
-  [20.5, 100.0], [20.0, 100.5], [19.5, 100.8], [18.5, 100.9],
-  [17.8, 98.5], [16.5, 98.3], [16.0, 97.8], [15.5, 97.5],
-  [14.8, 98.2], [13.5, 98.6], [11.5, 99.0], [10.0, 98.5],
-  [10.5, 98.0], [12.0, 97.5], [13.0, 97.8], [14.5, 97.5],
-  [16.0, 97.0], [17.0, 96.0], [17.5, 95.5], [18.0, 94.8],
-  [19.0, 93.5], [20.0, 92.5], [20.7, 92.2], [21.5, 92.3],
-  [22.0, 92.6], [23.0, 93.2], [24.0, 94.0], [25.0, 94.5],
-  [26.0, 95.0], [26.5, 96.0], [27.5, 96.5], [28.5, 97.3]
-], {
-  color: 'rgba(255,171,0,0.3)',
-  weight: 1.5,
-  dashArray: '6,4'
-}).addTo(map);
+// State/Region boundaries from admin1.geojson
+let admin1Layer = null;
+fetch('admin1.geojson')
+  .then(r => r.json())
+  .then(geojson => {
+    admin1Layer = L.geoJSON(geojson, {
+      style: {
+        color: '#4a5568',
+        weight: 1.5,
+        fillColor: '#e2e8f0',
+        fillOpacity: 0.15,
+        opacity: 0.7
+      },
+      onEachFeature: function(feature, layer) {
+        if (feature.properties && feature.properties.shapeName) {
+          layer.bindTooltip(feature.properties.shapeName, {
+            permanent: false,
+            direction: 'center',
+            className: 'region-tooltip'
+          });
+        }
+      }
+    }).addTo(map);
+  })
+  .catch(err => console.warn('Could not load admin1.geojson:', err));
 
 // ── Hotspot color by FRP ──
 function getColor(frp) {
@@ -660,42 +690,32 @@ function renderHotspots(data) {
   });
 }
 
-// ── Simple canvas-based heatmap ──
+// ── Heatmap using leaflet.heat ──
 function createHeatOverlay(data) {
-  // Use a simple approach: aggregate to grid cells and draw
   if (heatLayer) map.removeLayer(heatLayer);
 
-  const canvas = document.createElement('canvas');
-  const size = 600;
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-
-  // Myanmar bounds
-  const bounds = [[9.5, 92], [28.5, 100.5]];
-  const latRange = bounds[1][0] - bounds[0][0];
-  const lngRange = bounds[1][1] - bounds[0][1];
-
-  data.forEach(h => {
-    const x = ((h.lng - bounds[0][1]) / lngRange) * size;
-    const y = ((bounds[1][0] - h.lat) / latRange) * size;
-    const r = 6 + (h.frp > 50 ? 4 : h.frp > 10 ? 2 : 0);
-
-    const gradient = ctx.createRadialGradient(x, y, 0, x, y, r);
-    gradient.addColorStop(0, 'rgba(255, 77, 28, 0.25)');
-    gradient.addColorStop(0.5, 'rgba(255, 171, 0, 0.08)');
-    gradient.addColorStop(1, 'rgba(255, 171, 0, 0)');
-
-    ctx.beginPath();
-    ctx.fillStyle = gradient;
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
+  // Convert data to [lat, lng, intensity] format
+  // Normalize FRP to 0–1 range for intensity, with a log scale for better spread
+  const maxFrp = Math.max(...data.map(h => h.frp));
+  const heatPoints = data.map(h => {
+    const intensity = Math.log1p(h.frp) / Math.log1p(maxFrp);
+    return [h.lat, h.lng, intensity];
   });
 
-  const imageBounds = [bounds[0], bounds[1]];
-  heatLayer = L.imageOverlay(canvas.toDataURL(), imageBounds, {
-    opacity: 0.9,
-    interactive: false
+  heatLayer = L.heatLayer(heatPoints, {
+    radius: 18,
+    blur: 25,
+    maxZoom: 10,
+    max: 0.8,
+    minOpacity: 0.25,
+    gradient: {
+      0.2: '#ffffb2',
+      0.4: '#fecc5c',
+      0.55: '#fd8d3c',
+      0.7: '#f03b20',
+      0.85: '#e31a1c',
+      1.0: '#bd0026'
+    }
   }).addTo(map);
 }
 

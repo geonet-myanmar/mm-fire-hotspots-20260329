@@ -51,10 +51,11 @@ On **29 March 2026**, the Suomi NPP satellite's VIIRS sensor detected **6,863 fi
 ## Features
 
 ### Core Visualization
-- **6,863 fire hotspot markers** plotted on an interactive Leaflet.js dark-themed map
+- **6,863 fire hotspot markers** plotted on an interactive Leaflet.js light-themed map
 - **Color-coded by Fire Radiative Power (FRP)**: yellow (low), amber (medium), orange-red (high), red (extreme)
 - **Scaled marker radius** proportional to fire intensity
-- **Canvas-based heatmap overlay** showing fire density and clustering patterns
+- **leaflet.heat heatmap overlay** with multi-stop gradient (yellow–amber–orange–red–crimson) showing fire density and clustering patterns
+- **Admin Level 1 boundaries** — state/region polygons loaded from `admin1.geojson` with hover tooltips
 
 ### Interactive Controls
 - **Heatmap toggle** — enable/disable the thermal density overlay
@@ -75,7 +76,7 @@ On **29 March 2026**, the Suomi NPP satellite's VIIRS sensor detected **6,863 fi
 - **Info panel** — data source attribution and methodology notes
 
 ### Design & UX
-- **Dark-theme cartographic interface** optimized for fire data visualization
+- **Light basemap (CartoDB Positron)** ensuring fire hotspots and heatmap patterns are clearly visible against a neutral background
 - **Responsive layout** adapting to desktop and mobile screens
 - **Animated loading screen** with satellite data branding
 - **Glassmorphism UI panels** with backdrop blur and subtle glow effects
@@ -138,6 +139,7 @@ npx serve .
 ```
 mm-fire-hotspots-20260329/
 ├── index.html          # Main application (single-file, self-contained)
+├── admin1.geojson      # Myanmar state/region boundaries (Admin Level 1)
 ├── README.md           # This documentation
 ├── LICENSE             # MIT License
 └── CONTRIBUTING.md     # Contribution guidelines
@@ -153,8 +155,12 @@ The entire application is contained in a single `index.html` file for maximum po
 
 External dependencies loaded via CDN:
 - [Leaflet.js v1.9.4](https://leafletjs.com/) — interactive map engine
-- [CartoDB Dark Matter](https://carto.com/basemaps/) — dark base map tiles
+- [leaflet.heat v0.2.0](https://github.com/Leaflet/Leaflet.heat) — heatmap visualization plugin
+- [CartoDB Positron](https://carto.com/basemaps/) — light base map tiles
 - [Google Fonts](https://fonts.google.com/) — JetBrains Mono & DM Sans typefaces
+
+Local data files:
+- `admin1.geojson` — simplified Myanmar Admin Level 1 boundaries (14 states/regions, ~287 KB), sourced from [geoBoundaries](https://www.geoboundaries.org/) (CC BY 4.0)
 
 ---
 
@@ -327,11 +333,19 @@ Clickable chips showing the top 8 states/regions by hotspot count. Clicking any 
 
 ### Heatmap Generation
 
-The heatmap overlay is generated using HTML5 Canvas with radial gradients:
-- Each hotspot is rendered as a radial gradient with fire-colored stops
-- Gradient radius scales with FRP intensity
-- The canvas is projected onto Myanmar's geographic bounds using `L.imageOverlay`
-- Grid resolution: 600×600 pixels covering the 92°E–100.5°E, 9.5°N–28.5°N extent
+The heatmap overlay is generated using the [leaflet.heat](https://github.com/Leaflet/Leaflet.heat) plugin:
+- Each hotspot contributes an intensity value derived from log-scaled FRP (`log1p(frp) / log1p(maxFrp)`)
+- Heatmap parameters: radius 18 px, blur 25 px, maxZoom 10, minOpacity 0.25
+- Multi-stop color gradient: `#ffffb2` (0.2) → `#fecc5c` (0.4) → `#fd8d3c` (0.55) → `#f03b20` (0.7) → `#e31a1c` (0.85) → `#bd0026` (1.0)
+- Dynamically re-renders on zoom and pan for consistent visual analysis at all scales
+
+### Administrative Boundaries
+
+State/region boundaries are loaded from `admin1.geojson`:
+- **Source**: geoBoundaries (simplified geometry), CC BY 4.0
+- **Features**: 14 states/regions (Ayeyarwady, Bago, Chin, Kachin, Kayah, Kayin, Magway, Mandalay, Mon, Rakhine, Sagaing, Shan, Tanintharyi, Yangon)
+- **Styling**: `#4a5568` stroke (1.5 px), light fill at 15% opacity
+- **Interaction**: Hover tooltip displays the state/region name
 
 ### Spatial Data Distribution
 
@@ -354,10 +368,11 @@ Hotspot generation weights by state/region (based on historical fire patterns):
 
 ### Performance
 
-- **Initial load**: ~1.5 seconds (data generation + rendering)
+- **Initial load**: ~1.5 seconds (data generation + rendering + boundary fetch)
 - **6,863 circle markers**: rendered via Leaflet's Canvas renderer for optimal performance
-- **No external data fetching**: all data generated client-side (in synthetic mode)
-- **Total file size**: ~25 KB (single HTML file, gzipped ~8 KB)
+- **leaflet.heat heatmap**: WebGL-accelerated canvas rendering with dynamic re-rendering on zoom
+- **Admin boundaries**: ~287 KB GeoJSON loaded asynchronously (non-blocking)
+- **Total file size**: ~25 KB HTML + ~287 KB admin1.geojson
 
 ---
 
@@ -400,7 +415,10 @@ const regionWeights = [
 Replace the tile layer URL:
 
 ```javascript
-// Dark theme (default)
+// Light theme (default)
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {...})
+
+// Dark theme
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {...})
 
 // Satellite imagery
@@ -500,7 +518,6 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 
 Areas where contributions would be particularly valuable:
 - Integration with live NASA FIRMS API
-- State/Region boundary polygons (GeoJSON) for accurate region classification
 - Time-series animation showing fire progression over multiple days
 - Smoke/haze dispersion modeling overlay
 - Multi-country support for ASEAN fire monitoring
@@ -519,7 +536,9 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 - **NASA FIRMS** for providing open access to near real-time fire data
 - **GISTDA Thailand** for regional fire hotspot monitoring and reporting
 - **Leaflet.js** community for the excellent open-source mapping library
-- **CartoDB** for dark-themed base map tiles
+- **leaflet.heat** plugin for heatmap visualization
+- **CartoDB** for Positron light-themed base map tiles
+- **geoBoundaries** for open Admin Level 1 boundary data (CC BY 4.0)
 - Fire hotspot report data referenced from GISTDA bulletin, 29 March 2026
 
 ---
