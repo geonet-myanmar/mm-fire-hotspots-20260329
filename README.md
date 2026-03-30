@@ -151,7 +151,7 @@ The entire application is contained in a single `index.html` file for maximum po
 
 - **HTML** — semantic structure with overlay panels, map container, and UI controls
 - **CSS** — complete styling with CSS custom properties for theming (~200 lines)
-- **JavaScript** — data generation, Leaflet.js map initialization, interaction handlers, and statistics computation (~300 lines)
+- **JavaScript** — async GeoJSON loading, boundary-constrained data generation with point-in-polygon validation, Leaflet.js map initialization, interaction handlers, and statistics computation (~330 lines)
 
 External dependencies loaded via CDN:
 - [Leaflet.js v1.9.4](https://leafletjs.com/) — interactive map engine
@@ -170,10 +170,12 @@ Local data files:
 
 The dashboard currently uses **synthetically generated data** that accurately models the reported 6,863 hotspots with:
 
-- **Realistic spatial distribution** weighted by Myanmar's states/regions based on known fire patterns (Sagaing, Shan, and Kachin receiving the highest weights)
-- **Clustered point generation** simulating natural fire clustering behavior (40% of points cluster near existing points)
+- **Boundary-constrained placement** — every hotspot is generated within actual state/region polygons from `admin1.geojson` using ray-casting point-in-polygon testing (rejection sampling ensures no points fall outside Myanmar's borders)
+- **Realistic spatial distribution** weighted by Myanmar's 14 states/regions based on known fire patterns (Sagaing 28%, Shan 22%, Mandalay 10%, Kachin/Magway 8% each)
+- **Clustered point generation** simulating natural fire clustering behavior (40% of points cluster near existing points within the same region)
 - **Log-normal FRP distribution** matching typical VIIRS fire detections
 - **Realistic attribute ranges** for brightness temperature (300–410 K), confidence (40–100%), and acquisition times across multiple satellite overpasses
+- **Single source of truth** — all region metadata (centroids, bounding boxes, polygon boundaries) is derived at runtime from `admin1.geojson`, eliminating hardcoded duplicates
 
 ### Primary Data Sources
 
@@ -202,69 +204,59 @@ Register for a free MAP KEY at: https://firms.modaps.eosdis.nasa.gov/api/area/
 
 ### 2. Modify the Data Fetching Function
 
-Replace the `generateMyanmarHotspots()` function in `index.html` with:
+Replace the `generateMyanmarHotspots(regionMeta)` call in the `init()` function with a FIRMS API fetch. The `classifyPoint()` function already available in the codebase will assign each FIRMS detection to its correct state/region using the actual admin1 polygon boundaries:
 
 ```javascript
-async function fetchFIRMSData() {
+async function fetchFIRMSData(regionMeta) {
   const API_KEY = 'YOUR_FIRMS_MAP_KEY';
   const url = `https://firms.modaps.eosdis.nasa.gov/api/country/csv/${API_KEY}/VIIRS_SNPP_NRT/MMR/1`;
-  
+
   try {
     const response = await fetch(url);
     const csvText = await response.text();
     const lines = csvText.trim().split('\n');
     const headers = lines[0].split(',');
-    
+
     return lines.slice(1).map(line => {
       const values = line.split(',');
       const row = {};
       headers.forEach((h, i) => row[h.trim()] = values[i]?.trim());
-      
+
+      const lat = parseFloat(row.latitude);
+      const lng = parseFloat(row.longitude);
+
       return {
-        lat: parseFloat(row.latitude),
-        lng: parseFloat(row.longitude),
+        lat, lng,
         frp: parseFloat(row.frp) || 0,
         bright: parseFloat(row.bright_ti4) || 0,
         confidence: row.confidence === 'h' ? 90 : row.confidence === 'n' ? 60 : 30,
         satellite: row.satellite || 'N/A',
-        acqTime: row.acq_time ? 
+        acqTime: row.acq_time ?
           `${row.acq_time.slice(0,2)}:${row.acq_time.slice(2,4)} UTC` : '',
         acqDate: row.acq_date || '',
-        region: classifyRegion(parseFloat(row.latitude), parseFloat(row.longitude))
+        // Classify using actual admin1 polygon boundaries
+        region: classifyPoint(lat, lng, regionMeta) || 'Unknown'
       };
     });
   } catch (error) {
     console.error('FIRMS API error:', error);
-    return generateMyanmarHotspots(); // Fallback to synthetic data
+    return generateMyanmarHotspots(regionMeta); // Fallback to synthetic data
   }
 }
 ```
 
-### 3. Add Region Classification
+### 3. Update the Init Function
+
+Replace the `generateMyanmarHotspots(regionMeta)` call with `fetchFIRMSData(regionMeta)`:
 
 ```javascript
-function classifyRegion(lat, lng) {
-  // Simplified region classification by coordinate bounds
-  if (lat > 24) return lng > 96 ? 'Kachin' : 'Sagaing';
-  if (lat > 22) return lng > 97 ? 'Shan' : lng > 94 ? 'Mandalay' : 'Chin';
-  if (lat > 19) return lng > 97 ? 'Shan' : lng > 95 ? 'Mandalay' : 'Magway';
-  if (lat > 17) return lng > 97 ? 'Kayin' : lng > 96 ? 'Bago' : 'Magway';
-  if (lat > 15) return lng > 97 ? 'Mon' : 'Yangon';
-  return lng > 97.5 ? 'Tanintharyi' : 'Ayeyarwady';
-}
+// In the init() function, change this line:
+allData = generateMyanmarHotspots(regionMeta);
+// To:
+allData = await fetchFIRMSData(regionMeta);
 ```
 
-### 4. Update the Init Function
-
-```javascript
-async function init() {
-  allData = await fetchFIRMSData();
-  renderHotspots(allData);
-  createHeatOverlay(allData);
-  updateStats(allData);
-  // ... loading overlay code
-}
-```
+The existing `classifyPoint()` function uses ray-casting point-in-polygon testing against the actual admin1.geojson boundaries — no approximate coordinate-based classification needed.
 
 ### API Parameters Reference
 
@@ -303,7 +295,7 @@ Displays the project title, satellite source identifier, and a pulsing fire indi
 | **Avg Brightness** | Mean brightness temperature in Kelvin |
 
 ### Regional Panel (Left Side)
-Clickable chips showing the top 8 states/regions by hotspot count. Clicking any chip flies the map to that region's center at zoom level 8.
+Clickable chips showing the top 8 states/regions by hotspot count. Clicking any chip flies the map to that region's centroid (computed from `admin1.geojson` geometry) at zoom level 8.
 
 ### Bottom Controls
 | Button | Function |
@@ -341,11 +333,16 @@ The heatmap overlay is generated using the [leaflet.heat](https://github.com/Lea
 
 ### Administrative Boundaries
 
-State/region boundaries are loaded from `admin1.geojson`:
+`admin1.geojson` serves as the **single source of truth** for all geographic operations:
 - **Source**: geoBoundaries (simplified geometry), CC BY 4.0
 - **Features**: 14 states/regions (Ayeyarwady, Bago, Chin, Kachin, Kayah, Kayin, Magway, Mandalay, Mon, Rakhine, Sagaing, Shan, Tanintharyi, Yangon)
 - **Styling**: `#4a5568` stroke (1.5 px), light fill at 15% opacity
 - **Interaction**: Hover tooltip displays the state/region name
+- **Derived data** (computed at runtime from GeoJSON, not hardcoded):
+  - Region centroids (for fly-to navigation)
+  - Bounding boxes (for rejection-sampling hotspot placement)
+  - Polygon geometry (for point-in-polygon boundary validation)
+  - Region classification (for assigning hotspots to states/regions)
 
 ### Spatial Data Distribution
 
@@ -368,11 +365,12 @@ Hotspot generation weights by state/region (based on historical fire patterns):
 
 ### Performance
 
-- **Initial load**: ~1.5 seconds (data generation + rendering + boundary fetch)
+- **Initial load**: ~2 seconds (GeoJSON fetch → metadata extraction → boundary-validated hotspot generation → rendering)
 - **6,863 circle markers**: rendered via Leaflet's Canvas renderer for optimal performance
-- **leaflet.heat heatmap**: WebGL-accelerated canvas rendering with dynamic re-rendering on zoom
-- **Admin boundaries**: ~287 KB GeoJSON loaded asynchronously (non-blocking)
-- **Total file size**: ~25 KB HTML + ~287 KB admin1.geojson
+- **Point-in-polygon validation**: ray-casting algorithm with bounding-box pre-rejection for fast spatial testing
+- **leaflet.heat heatmap**: canvas-based rendering with dynamic re-rendering on zoom
+- **Admin boundaries**: ~287 KB GeoJSON fetched once, then reused for boundaries, generation, and classification
+- **Total file size**: ~27 KB HTML + ~287 KB admin1.geojson
 
 ---
 
@@ -401,13 +399,14 @@ const n = 6863;  // Change this to any desired count
 
 ### Change Region Weights
 
-Update the `regionWeights` array to model different fire distribution scenarios:
+Update the `REGION_WEIGHTS` object to model different fire distribution scenarios:
 
 ```javascript
-const regionWeights = [
-  { name: 'Sagaing', latRange: [22, 25.5], lngRange: [94, 96.5], weight: 0.28 },
+const REGION_WEIGHTS = {
+  'Sagaing': 0.28, 'Shan': 0.22, 'Mandalay': 0.10, 'Kachin': 0.08,
   // Adjust weights (must sum to ~1.0)
-];
+  // Bounding boxes and polygons are derived automatically from admin1.geojson
+};
 ```
 
 ### Switch Base Map

@@ -509,32 +509,6 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   subdomains: 'abcd'
 }).addTo(map);
 
-// State/Region boundaries from admin1.geojson
-let admin1Layer = null;
-fetch('admin1.geojson')
-  .then(r => r.json())
-  .then(geojson => {
-    admin1Layer = L.geoJSON(geojson, {
-      style: {
-        color: '#4a5568',
-        weight: 1.5,
-        fillColor: '#e2e8f0',
-        fillOpacity: 0.15,
-        opacity: 0.7
-      },
-      onEachFeature: function(feature, layer) {
-        if (feature.properties && feature.properties.shapeName) {
-          layer.bindTooltip(feature.properties.shapeName, {
-            permanent: false,
-            direction: 'center',
-            className: 'region-tooltip'
-          });
-        }
-      }
-    }).addTo(map);
-  })
-  .catch(err => console.warn('Could not load admin1.geojson:', err));
-
 // ── Hotspot color by FRP ──
 function getColor(frp) {
   if (frp > 100) return '#ff1744';
@@ -551,96 +525,150 @@ function getRadius(frp) {
 }
 
 // ── Data Layer Groups ──
+let admin1Layer = null;
 let pointsLayer = L.layerGroup().addTo(map);
 let heatLayer = null;
 let showHeatmap = true;
 let allData = [];
+let regionMeta = {};  // derived from admin1.geojson
 
-// ── State/Region approximate centroids for labeling ──
-const regions = {
-  'Sagaing': { lat: 23.5, lng: 95.5 },
-  'Shan': { lat: 21.0, lng: 98.0 },
-  'Mandalay': { lat: 21.5, lng: 96.0 },
-  'Magway': { lat: 20.0, lng: 95.0 },
-  'Bago': { lat: 18.0, lng: 96.5 },
-  'Kachin': { lat: 26.0, lng: 97.0 },
-  'Chin': { lat: 22.0, lng: 93.5 },
-  'Kayah': { lat: 19.3, lng: 97.3 },
-  'Kayin': { lat: 17.0, lng: 97.5 },
-  'Mon': { lat: 16.0, lng: 97.5 },
-  'Rakhine': { lat: 19.5, lng: 94.0 },
-  'Tanintharyi': { lat: 13.0, lng: 98.5 },
-  'Yangon': { lat: 17.0, lng: 96.2 },
-  'Ayeyarwady': { lat: 16.5, lng: 95.5 },
-  'Naypyidaw': { lat: 19.8, lng: 96.1 }
+// ── Geometry helpers (all derived from admin1.geojson) ──
+
+// Ray-casting point-in-polygon test
+function pointInRing(lat, lng, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][1], yi = ring[i][0];  // GeoJSON is [lng, lat]
+    const xj = ring[j][1], yj = ring[j][0];
+    if (((yi > lng) !== (yj > lng)) &&
+        (lat < (xj - xi) * (lng - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function pointInPolygon(lat, lng, coordinates) {
+  // First ring is outer boundary, rest are holes
+  if (!pointInRing(lat, lng, coordinates[0])) return false;
+  for (let i = 1; i < coordinates.length; i++) {
+    if (pointInRing(lat, lng, coordinates[i])) return false;
+  }
+  return true;
+}
+
+function pointInFeature(lat, lng, feature) {
+  const geom = feature.geometry;
+  if (geom.type === 'Polygon') {
+    return pointInPolygon(lat, lng, geom.coordinates);
+  }
+  if (geom.type === 'MultiPolygon') {
+    return geom.coordinates.some(poly => pointInPolygon(lat, lng, poly));
+  }
+  return false;
+}
+
+// Extract metadata from each GeoJSON feature: centroid, bounding box, polygon ref
+function extractRegionMeta(geojson) {
+  const meta = {};
+  geojson.features.forEach(feat => {
+    const name = feat.properties.shapeName;
+    const coords = [];
+    const collectCoords = (geom) => {
+      if (geom.type === 'Polygon') {
+        geom.coordinates.forEach(ring => ring.forEach(c => coords.push(c)));
+      } else if (geom.type === 'MultiPolygon') {
+        geom.coordinates.forEach(poly => poly.forEach(ring => ring.forEach(c => coords.push(c))));
+      }
+    };
+    collectCoords(feat.geometry);
+
+    const lngs = coords.map(c => c[0]);
+    const lats = coords.map(c => c[1]);
+    meta[name] = {
+      centroidLat: lats.reduce((a, b) => a + b, 0) / lats.length,
+      centroidLng: lngs.reduce((a, b) => a + b, 0) / lngs.length,
+      minLat: Math.min(...lats),
+      maxLat: Math.max(...lats),
+      minLng: Math.min(...lngs),
+      maxLng: Math.max(...lngs),
+      feature: feat
+    };
+  });
+  return meta;
+}
+
+// Find which region a point falls in (using actual polygon boundaries)
+function classifyPoint(lat, lng, regionMeta) {
+  for (const [name, meta] of Object.entries(regionMeta)) {
+    // Quick bounding-box reject
+    if (lat < meta.minLat || lat > meta.maxLat || lng < meta.minLng || lng > meta.maxLng) continue;
+    if (pointInFeature(lat, lng, meta.feature)) return name;
+  }
+  return null;
+}
+
+// ── Generate hotspots constrained to actual admin1 boundaries ──
+// Distribution weights by region (based on historical fire patterns)
+const REGION_WEIGHTS = {
+  'Sagaing': 0.28, 'Shan': 0.22, 'Mandalay': 0.10, 'Kachin': 0.08,
+  'Magway': 0.08, 'Bago': 0.06, 'Chin': 0.05, 'Kayin': 0.03,
+  'Rakhine': 0.03, 'Kayah': 0.02, 'Tanintharyi': 0.02, 'Mon': 0.01,
+  'Yangon': 0.01, 'Ayeyarwady': 0.01
 };
 
-// ── Generate realistic synthetic VIIRS-style data for Myanmar ──
-// Based on the report: Myanmar had 6,863 hotspots on 29 March
-function generateMyanmarHotspots() {
+function generateMyanmarHotspots(regionMeta) {
   const hotspots = [];
   const n = 6863;
 
-  // Distribution weights by region (forest fire patterns)
-  const regionWeights = [
-    { name: 'Sagaing', latRange: [22, 25.5], lngRange: [94, 96.5], weight: 0.28 },
-    { name: 'Shan', latRange: [19.5, 23.5], lngRange: [96.5, 100], weight: 0.22 },
-    { name: 'Mandalay', latRange: [20.5, 22.5], lngRange: [95, 97], weight: 0.10 },
-    { name: 'Magway', latRange: [19, 21], lngRange: [94, 95.8], weight: 0.08 },
-    { name: 'Bago', latRange: [17, 19], lngRange: [95.5, 97], weight: 0.06 },
-    { name: 'Kachin', latRange: [24, 28], lngRange: [96, 98.5], weight: 0.08 },
-    { name: 'Chin', latRange: [21, 23], lngRange: [92.5, 94], weight: 0.05 },
-    { name: 'Kayah', latRange: [18.8, 19.8], lngRange: [96.8, 97.8], weight: 0.02 },
-    { name: 'Kayin', latRange: [15.5, 18], lngRange: [97, 98.5], weight: 0.03 },
-    { name: 'Rakhine', latRange: [18, 21], lngRange: [93, 94.8], weight: 0.03 },
-    { name: 'Tanintharyi', latRange: [10, 15], lngRange: [97.5, 99.5], weight: 0.02 },
-    { name: 'Mon', latRange: [15, 17], lngRange: [97, 98], weight: 0.01 },
-    { name: 'Yangon', latRange: [16.5, 17.5], lngRange: [95.8, 96.5], weight: 0.01 },
-    { name: 'Ayeyarwady', latRange: [15.5, 17], lngRange: [94, 96], weight: 0.01 }
-  ];
+  // Build weighted region list using actual bounding boxes from GeoJSON
+  const weightedRegions = Object.entries(REGION_WEIGHTS).map(([name, weight]) => ({
+    name,
+    weight,
+    meta: regionMeta[name]
+  })).filter(r => r.meta);
 
   for (let i = 0; i < n; i++) {
     // Select region by weight
-    let r = Math.random();
-    let region = regionWeights[0];
-    let cumulative = 0;
-    for (const rw of regionWeights) {
+    let r = Math.random(), cumulative = 0;
+    let region = weightedRegions[0];
+    for (const rw of weightedRegions) {
       cumulative += rw.weight;
       if (r <= cumulative) { region = rw; break; }
     }
 
-    // Generate clustered points (fires cluster naturally)
-    let lat, lng;
+    const m = region.meta;
+    let lat, lng, valid = false;
+
+    // Try clustering near an existing point in the same region first
     if (Math.random() < 0.4 && hotspots.length > 50) {
-      // Cluster near existing point
-      const ref = hotspots[Math.floor(Math.random() * Math.min(hotspots.length, 200))];
-      lat = ref.lat + (Math.random() - 0.5) * 0.15;
-      lng = ref.lng + (Math.random() - 0.5) * 0.15;
-    } else {
-      lat = region.latRange[0] + Math.random() * (region.latRange[1] - region.latRange[0]);
-      lng = region.lngRange[0] + Math.random() * (region.lngRange[1] - region.lngRange[0]);
+      const sameRegion = hotspots.filter(h => h.region === region.name);
+      if (sameRegion.length > 0) {
+        const ref = sameRegion[Math.floor(Math.random() * Math.min(sameRegion.length, 200))];
+        lat = ref.lat + (Math.random() - 0.5) * 0.15;
+        lng = ref.lng + (Math.random() - 0.5) * 0.15;
+        if (pointInFeature(lat, lng, m.feature)) valid = true;
+      }
     }
 
-    // Clamp to region bounds
-    lat = Math.max(region.latRange[0], Math.min(region.latRange[1], lat));
-    lng = Math.max(region.lngRange[0], Math.min(region.lngRange[1], lng));
+    // Rejection sampling: generate within bounding box, keep only if inside polygon
+    if (!valid) {
+      for (let attempt = 0; attempt < 30; attempt++) {
+        lat = m.minLat + Math.random() * (m.maxLat - m.minLat);
+        lng = m.minLng + Math.random() * (m.maxLng - m.minLng);
+        if (pointInFeature(lat, lng, m.feature)) { valid = true; break; }
+      }
+    }
+
+    if (!valid) { i--; continue; }
 
     // FRP: log-normal distribution (most are low, some extreme)
     const frp = Math.exp(Math.random() * 3.5 + 0.5) + Math.random() * 5;
-
-    // Brightness temperature
     const bright = 300 + Math.random() * 80 + (frp > 50 ? 30 : 0);
-
-    // Confidence
     const conf = Math.floor(40 + Math.random() * 60);
-
-    // Satellite
     const satellite = Math.random() > 0.4 ? 'Suomi NPP' : 'NOAA-20';
-
-    // Timestamp (29 March 2026, various passes)
     const hour = [1, 2, 5, 6, 13, 14, 17, 18][Math.floor(Math.random() * 8)];
     const minute = Math.floor(Math.random() * 60);
-    const acqTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} UTC`;
 
     hotspots.push({
       lat: parseFloat(lat.toFixed(4)),
@@ -648,8 +676,8 @@ function generateMyanmarHotspots() {
       frp: parseFloat(frp.toFixed(1)),
       bright: parseFloat(bright.toFixed(1)),
       confidence: conf,
-      satellite: satellite,
-      acqTime: acqTime,
+      satellite,
+      acqTime: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} UTC`,
       acqDate: '2026-03-29',
       region: region.name
     });
@@ -694,8 +722,6 @@ function renderHotspots(data) {
 function createHeatOverlay(data) {
   if (heatLayer) map.removeLayer(heatLayer);
 
-  // Convert data to [lat, lng, intensity] format
-  // Normalize FRP to 0–1 range for intensity, with a log scale for better spread
   const maxFrp = Math.max(...data.map(h => h.frp));
   const heatPoints = data.map(h => {
     const intensity = Math.log1p(h.frp) / Math.log1p(maxFrp);
@@ -719,7 +745,7 @@ function createHeatOverlay(data) {
   }).addTo(map);
 }
 
-// ── Update stats ──
+// ── Update stats (region chips use GeoJSON-derived centroids) ──
 function updateStats(data) {
   document.getElementById('totalCount').textContent = data.length.toLocaleString();
   document.getElementById('dateRange').textContent = '29 March 2026 · VIIRS';
@@ -745,8 +771,8 @@ function updateStats(data) {
     chip.className = 'region-chip';
     chip.innerHTML = `<span>${name}</span><span class="count">${count.toLocaleString()}</span>`;
     chip.onclick = () => {
-      const r = regions[name];
-      if (r) map.flyTo([r.lat, r.lng], 8, { duration: 1.2 });
+      const m = regionMeta[name];
+      if (m) map.flyTo([m.centroidLat, m.centroidLng], 8, { duration: 1.2 });
     };
     regionPanel.appendChild(chip);
   });
@@ -766,7 +792,6 @@ function toggleHeatmap() {
 function toggleCluster() {
   const btn = document.getElementById('btnCluster');
   btn.classList.toggle('active');
-  // Toggle point visibility
   if (map.hasLayer(pointsLayer)) {
     map.removeLayer(pointsLayer);
   } else {
@@ -780,12 +805,44 @@ function toggleInfo() {
   document.getElementById('btnInfo').classList.toggle('active');
 }
 
-// ── Initialize ──
-function init() {
-  allData = generateMyanmarHotspots();
-  renderHotspots(allData);
-  createHeatOverlay(allData);
-  updateStats(allData);
+// ── Initialize: load GeoJSON first, derive everything from it ──
+async function init() {
+  try {
+    const resp = await fetch('admin1.geojson');
+    const geojson = await resp.json();
+
+    // Extract region metadata (centroids, bounds, polygon refs)
+    regionMeta = extractRegionMeta(geojson);
+
+    // Render boundary layer
+    admin1Layer = L.geoJSON(geojson, {
+      style: {
+        color: '#4a5568',
+        weight: 1.5,
+        fillColor: '#e2e8f0',
+        fillOpacity: 0.15,
+        opacity: 0.7
+      },
+      onEachFeature: function(feature, layer) {
+        if (feature.properties && feature.properties.shapeName) {
+          layer.bindTooltip(feature.properties.shapeName, {
+            permanent: false,
+            direction: 'center',
+            className: 'region-tooltip'
+          });
+        }
+      }
+    }).addTo(map);
+
+    // Generate hotspots constrained to actual polygon boundaries
+    allData = generateMyanmarHotspots(regionMeta);
+    renderHotspots(allData);
+    createHeatOverlay(allData);
+    updateStats(allData);
+
+  } catch (err) {
+    console.error('Failed to load admin1.geojson:', err);
+  }
 
   // Hide loading
   setTimeout(() => {
