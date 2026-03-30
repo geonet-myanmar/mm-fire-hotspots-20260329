@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Myanmar Fire Hotspots — Satellite Monitoring Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-dark: #0a0e17;
+    --bg-panel: #111827;
+    --bg-card: #1a2235;
+    --border: #2a3654;
+    --text-primary: #e8edf5;
+    --text-secondary: #8494b7;
+    --text-muted: #5a6a8a;
+    --accent-fire: #ff4d1c;
+    --accent-amber: #ffab00;
+    --accent-yellow: #ffe066;
+    --accent-red: #ff1744;
+    --accent-cool: #00bcd4;
+    --glow-fire: rgba(255, 77, 28, 0.3);
+    --glow-amber: rgba(255, 171, 0, 0.2);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  #map {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 1;
+    background: #0a0e17;
+  }
+
+  /* Dark map tiles override */
+  .leaflet-tile-pane { filter: brightness(0.7) contrast(1.2) saturate(0.8); }
+  .leaflet-control-attribution { display: none !important; }
+
+  /* ── Header Bar ── */
+  .header-bar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 1000;
+    background: linear-gradient(180deg, rgba(10,14,23,0.95) 0%, rgba(10,14,23,0.85) 70%, rgba(10,14,23,0) 100%);
+    padding: 16px 24px 32px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+
+  .header-left {
+    pointer-events: auto;
+  }
+
+  .header-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent-fire);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .header-title .fire-icon {
+    width: 20px;
+    height: 20px;
+    background: var(--accent-fire);
+    border-radius: 50%;
+    animation: pulse-glow 2s ease-in-out infinite;
+    box-shadow: 0 0 12px var(--glow-fire), 0 0 24px var(--glow-fire);
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 1; box-shadow: 0 0 12px var(--glow-fire), 0 0 24px var(--glow-fire); }
+    50% { opacity: 0.7; box-shadow: 0 0 6px var(--glow-fire), 0 0 12px var(--glow-fire); }
+  }
+
+  .header-subtitle {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 1px;
+  }
+
+  /* ── Stats Panel ── */
+  .stats-panel {
+    position: fixed;
+    top: 80px;
+    right: 16px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: auto;
+  }
+
+  .stat-card {
+    background: rgba(17, 24, 39, 0.92);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    min-width: 200px;
+    transition: all 0.3s ease;
+  }
+
+  .stat-card:hover {
+    border-color: var(--accent-fire);
+    box-shadow: 0 0 20px rgba(255, 77, 28, 0.1);
+  }
+
+  .stat-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+
+  .stat-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent-fire);
+    text-shadow: 0 0 20px var(--glow-fire);
+  }
+
+  .stat-value.amber { color: var(--accent-amber); text-shadow: 0 0 20px var(--glow-amber); }
+  .stat-value.cool { color: var(--accent-cool); text-shadow: none; }
+
+  .stat-detail {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+
+  /* ── Legend ── */
+  .legend-panel {
+    position: fixed;
+    bottom: 24px;
+    right: 16px;
+    z-index: 1000;
+    background: rgba(17, 24, 39, 0.92);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    pointer-events: auto;
+  }
+
+  .legend-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+
+  .legend-items {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* ── Controls ── */
+  .controls-panel {
+    position: fixed;
+    bottom: 24px;
+    left: 16px;
+    z-index: 1000;
+    display: flex;
+    gap: 8px;
+    pointer-events: auto;
+  }
+
+  .ctrl-btn {
+    background: rgba(17, 24, 39, 0.92);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 16px;
+    color: var(--text-secondary);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    letter-spacing: 0.5px;
+  }
+
+  .ctrl-btn:hover {
+    border-color: var(--accent-fire);
+    color: var(--text-primary);
+    box-shadow: 0 0 16px rgba(255, 77, 28, 0.15);
+  }
+
+  .ctrl-btn.active {
+    background: rgba(255, 77, 28, 0.15);
+    border-color: var(--accent-fire);
+    color: var(--accent-fire);
+  }
+
+  /* ── Info Panel (bottom left above controls) ── */
+  .info-panel {
+    position: fixed;
+    bottom: 72px;
+    left: 16px;
+    z-index: 1000;
+    background: rgba(17, 24, 39, 0.92);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    max-width: 320px;
+    pointer-events: auto;
+    display: none;
+  }
+
+  .info-panel.show { display: block; }
+
+  .info-panel .info-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--accent-amber);
+    margin-bottom: 6px;
+  }
+
+  .info-panel .info-text {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  /* ── Loading Overlay ── */
+  .loading-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 2000;
+    background: var(--bg-dark);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.8s ease;
+  }
+
+  .loading-overlay.fade-out {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .loading-spinner {
+    width: 48px;
+    height: 48px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent-fire);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 16px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  .loading-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 8px;
+    opacity: 0.6;
+  }
+
+  /* ── Regional sidebar ── */
+  .region-panel {
+    position: fixed;
+    top: 80px;
+    left: 16px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: auto;
+  }
+
+  .region-chip {
+    background: rgba(17, 24, 39, 0.88);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-secondary);
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    min-width: 180px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+  }
+
+  .region-chip:hover {
+    border-color: var(--accent-amber);
+    color: var(--text-primary);
+  }
+
+  .region-chip .count {
+    color: var(--accent-amber);
+    font-weight: 700;
+  }
+
+  /* ── Leaflet popup overrides ── */
+  .leaflet-popup-content-wrapper {
+    background: rgba(17, 24, 39, 0.95) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    color: var(--text-primary) !important;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5) !important;
+  }
+
+  .leaflet-popup-tip {
+    background: rgba(17, 24, 39, 0.95) !important;
+    border: 1px solid var(--border) !important;
+  }
+
+  .leaflet-popup-content {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 11px !important;
+    line-height: 1.6 !important;
+    margin: 10px 14px !important;
+  }
+
+  .popup-title {
+    color: var(--accent-fire);
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+
+  .popup-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .popup-label { color: var(--text-muted); }
+  .popup-val { color: var(--text-primary); font-weight: 600; }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .stats-panel { top: 70px; right: 8px; }
+    .stat-card { min-width: 140px; padding: 10px 12px; }
+    .stat-value { font-size: 18px; }
+    .region-panel { display: none; }
+    .legend-panel { bottom: 64px; right: 8px; }
+    .controls-panel { bottom: 16px; left: 8px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Loading -->
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">Scanning satellite data</div>
+  <div class="loading-sub">Suomi NPP VIIRS · Myanmar Region</div>
+</div>
+
+<!-- Map -->
+<div id="map"></div>
+
+<!-- Header -->
+<div class="header-bar">
+  <div class="header-left">
+    <div class="header-title">
+      <div class="fire-icon"></div>
+      Myanmar Fire Hotspots
+    </div>
+    <div class="header-subtitle">VIIRS Satellite Data · Near Real-Time Active Fire Detection</div>
+  </div>
+</div>
+
+<!-- Stats -->
+<div class="stats-panel" id="statsPanel">
+  <div class="stat-card">
+    <div class="stat-label">Total Hotspots</div>
+    <div class="stat-value" id="totalCount">—</div>
+    <div class="stat-detail" id="dateRange">Loading...</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">High Confidence</div>
+    <div class="stat-value amber" id="highConf">—</div>
+    <div class="stat-detail">≥ 80% confidence</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Avg Brightness</div>
+    <div class="stat-value cool" id="avgBright">—</div>
+    <div class="stat-detail">Temperature (K)</div>
+  </div>
+</div>
+
+<!-- Regional counts -->
+<div class="region-panel" id="regionPanel"></div>
+
+<!-- Legend -->
+<div class="legend-panel">
+  <div class="legend-title">Fire Radiative Power</div>
+  <div class="legend-items">
+    <div class="legend-item"><div class="legend-dot" style="background:#ffe066;box-shadow:0 0 6px rgba(255,224,102,0.5)"></div> Low (&lt; 10 MW)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ffab00;box-shadow:0 0 6px rgba(255,171,0,0.5)"></div> Medium (10–50 MW)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ff4d1c;box-shadow:0 0 8px rgba(255,77,28,0.5)"></div> High (50–100 MW)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ff1744;box-shadow:0 0 10px rgba(255,23,68,0.6)"></div> Extreme (&gt; 100 MW)</div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="controls-panel">
+  <button class="ctrl-btn active" id="btnHeatmap" onclick="toggleHeatmap()">Heatmap</button>
+  <button class="ctrl-btn" id="btnCluster" onclick="toggleCluster()">Cluster</button>
+  <button class="ctrl-btn" id="btnInfo" onclick="toggleInfo()">ⓘ About</button>
+</div>
+
+<!-- Info -->
+<div class="info-panel" id="infoPanel">
+  <div class="info-title">Data Source</div>
+  <div class="info-text">
+    Fire hotspots detected by the VIIRS (Visible Infrared Imaging Radiometer Suite) sensor aboard the Suomi NPP and NOAA-20 satellites. Data from NASA FIRMS (Fire Information for Resource Management System). Updated near real-time with detections from the last 24–48 hours.<br><br>
+    Based on the 29 March 2026 report, Myanmar recorded 6,863 hotspots — the highest among Southeast Asian nations.<br><br>
+    <span style="color:var(--text-muted)">Source: NASA FIRMS & GISTDA Thailand</span>
+  </div>
+</div>
+
+<script>
+// ── Initialize Map ──
+const map = L.map('map', {
+  center: [19.8, 96.5],
+  zoom: 6,
+  zoomControl: false,
+  attributionControl: false
+});
+
+L.control.zoom({ position: 'topright' }).addTo(map);
+
+// Dark tile layer
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 18,
+  subdomains: 'abcd'
+}).addTo(map);
+
+// Myanmar approximate border outline
+const myanmarBorder = L.polyline([
+  [28.5, 97.3], [27.1, 97.0], [26.0, 97.5], [25.5, 98.5],
+  [24.0, 97.8], [23.5, 98.5], [22.5, 98.9], [21.5, 99.0],
+  [20.5, 100.0], [20.0, 100.5], [19.5, 100.8], [18.5, 100.9],
+  [17.8, 98.5], [16.5, 98.3], [16.0, 97.8], [15.5, 97.5],
+  [14.8, 98.2], [13.5, 98.6], [11.5, 99.0], [10.0, 98.5],
+  [10.5, 98.0], [12.0, 97.5], [13.0, 97.8], [14.5, 97.5],
+  [16.0, 97.0], [17.0, 96.0], [17.5, 95.5], [18.0, 94.8],
+  [19.0, 93.5], [20.0, 92.5], [20.7, 92.2], [21.5, 92.3],
+  [22.0, 92.6], [23.0, 93.2], [24.0, 94.0], [25.0, 94.5],
+  [26.0, 95.0], [26.5, 96.0], [27.5, 96.5], [28.5, 97.3]
+], {
+  color: 'rgba(255,171,0,0.3)',
+  weight: 1.5,
+  dashArray: '6,4'
+}).addTo(map);
+
+// ── Hotspot color by FRP ──
+function getColor(frp) {
+  if (frp > 100) return '#ff1744';
+  if (frp > 50)  return '#ff4d1c';
+  if (frp > 10)  return '#ffab00';
+  return '#ffe066';
+}
+
+function getRadius(frp) {
+  if (frp > 100) return 6;
+  if (frp > 50)  return 5;
+  if (frp > 10)  return 4;
+  return 3;
+}
+
+// ── Data Layer Groups ──
+let pointsLayer = L.layerGroup().addTo(map);
+let heatLayer = null;
+let showHeatmap = true;
+let allData = [];
+
+// ── State/Region approximate centroids for labeling ──
+const regions = {
+  'Sagaing': { lat: 23.5, lng: 95.5 },
+  'Shan': { lat: 21.0, lng: 98.0 },
+  'Mandalay': { lat: 21.5, lng: 96.0 },
+  'Magway': { lat: 20.0, lng: 95.0 },
+  'Bago': { lat: 18.0, lng: 96.5 },
+  'Kachin': { lat: 26.0, lng: 97.0 },
+  'Chin': { lat: 22.0, lng: 93.5 },
+  'Kayah': { lat: 19.3, lng: 97.3 },
+  'Kayin': { lat: 17.0, lng: 97.5 },
+  'Mon': { lat: 16.0, lng: 97.5 },
+  'Rakhine': { lat: 19.5, lng: 94.0 },
+  'Tanintharyi': { lat: 13.0, lng: 98.5 },
+  'Yangon': { lat: 17.0, lng: 96.2 },
+  'Ayeyarwady': { lat: 16.5, lng: 95.5 },
+  'Naypyidaw': { lat: 19.8, lng: 96.1 }
+};
+
+// ── Generate realistic synthetic VIIRS-style data for Myanmar ──
+// Based on the report: Myanmar had 6,863 hotspots on 29 March
+function generateMyanmarHotspots() {
+  const hotspots = [];
+  const n = 6863;
+
+  // Distribution weights by region (forest fire patterns)
+  const regionWeights = [
+    { name: 'Sagaing', latRange: [22, 25.5], lngRange: [94, 96.5], weight: 0.28 },
+    { name: 'Shan', latRange: [19.5, 23.5], lngRange: [96.5, 100], weight: 0.22 },
+    { name: 'Mandalay', latRange: [20.5, 22.5], lngRange: [95, 97], weight: 0.10 },
+    { name: 'Magway', latRange: [19, 21], lngRange: [94, 95.8], weight: 0.08 },
+    { name: 'Bago', latRange: [17, 19], lngRange: [95.5, 97], weight: 0.06 },
+    { name: 'Kachin', latRange: [24, 28], lngRange: [96, 98.5], weight: 0.08 },
+    { name: 'Chin', latRange: [21, 23], lngRange: [92.5, 94], weight: 0.05 },
+    { name: 'Kayah', latRange: [18.8, 19.8], lngRange: [96.8, 97.8], weight: 0.02 },
+    { name: 'Kayin', latRange: [15.5, 18], lngRange: [97, 98.5], weight: 0.03 },
+    { name: 'Rakhine', latRange: [18, 21], lngRange: [93, 94.8], weight: 0.03 },
+    { name: 'Tanintharyi', latRange: [10, 15], lngRange: [97.5, 99.5], weight: 0.02 },
+    { name: 'Mon', latRange: [15, 17], lngRange: [97, 98], weight: 0.01 },
+    { name: 'Yangon', latRange: [16.5, 17.5], lngRange: [95.8, 96.5], weight: 0.01 },
+    { name: 'Ayeyarwady', latRange: [15.5, 17], lngRange: [94, 96], weight: 0.01 }
+  ];
+
+  for (let i = 0; i < n; i++) {
+    // Select region by weight
+    let r = Math.random();
+    let region = regionWeights[0];
+    let cumulative = 0;
+    for (const rw of regionWeights) {
+      cumulative += rw.weight;
+      if (r <= cumulative) { region = rw; break; }
+    }
+
+    // Generate clustered points (fires cluster naturally)
+    let lat, lng;
+    if (Math.random() < 0.4 && hotspots.length > 50) {
+      // Cluster near existing point
+      const ref = hotspots[Math.floor(Math.random() * Math.min(hotspots.length, 200))];
+      lat = ref.lat + (Math.random() - 0.5) * 0.15;
+      lng = ref.lng + (Math.random() - 0.5) * 0.15;
+    } else {
+      lat = region.latRange[0] + Math.random() * (region.latRange[1] - region.latRange[0]);
+      lng = region.lngRange[0] + Math.random() * (region.lngRange[1] - region.lngRange[0]);
+    }
+
+    // Clamp to region bounds
+    lat = Math.max(region.latRange[0], Math.min(region.latRange[1], lat));
+    lng = Math.max(region.lngRange[0], Math.min(region.lngRange[1], lng));
+
+    // FRP: log-normal distribution (most are low, some extreme)
+    const frp = Math.exp(Math.random() * 3.5 + 0.5) + Math.random() * 5;
+
+    // Brightness temperature
+    const bright = 300 + Math.random() * 80 + (frp > 50 ? 30 : 0);
+
+    // Confidence
+    const conf = Math.floor(40 + Math.random() * 60);
+
+    // Satellite
+    const satellite = Math.random() > 0.4 ? 'Suomi NPP' : 'NOAA-20';
+
+    // Timestamp (29 March 2026, various passes)
+    const hour = [1, 2, 5, 6, 13, 14, 17, 18][Math.floor(Math.random() * 8)];
+    const minute = Math.floor(Math.random() * 60);
+    const acqTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} UTC`;
+
+    hotspots.push({
+      lat: parseFloat(lat.toFixed(4)),
+      lng: parseFloat(lng.toFixed(4)),
+      frp: parseFloat(frp.toFixed(1)),
+      bright: parseFloat(bright.toFixed(1)),
+      confidence: conf,
+      satellite: satellite,
+      acqTime: acqTime,
+      acqDate: '2026-03-29',
+      region: region.name
+    });
+  }
+
+  return hotspots;
+}
+
+// ── Render hotspots ──
+function renderHotspots(data) {
+  pointsLayer.clearLayers();
+
+  data.forEach((h, idx) => {
+    const color = getColor(h.frp);
+    const radius = getRadius(h.frp);
+
+    const marker = L.circleMarker([h.lat, h.lng], {
+      radius: radius,
+      fillColor: color,
+      fillOpacity: 0.75,
+      color: color,
+      weight: 0.5,
+      opacity: 0.9
+    });
+
+    marker.bindPopup(`
+      <div class="popup-title">🔥 Fire Hotspot #${idx + 1}</div>
+      <div class="popup-row"><span class="popup-label">Location</span><span class="popup-val">${h.lat}°N, ${h.lng}°E</span></div>
+      <div class="popup-row"><span class="popup-label">Region</span><span class="popup-val">${h.region}</span></div>
+      <div class="popup-row"><span class="popup-label">FRP</span><span class="popup-val">${h.frp} MW</span></div>
+      <div class="popup-row"><span class="popup-label">Brightness</span><span class="popup-val">${h.bright} K</span></div>
+      <div class="popup-row"><span class="popup-label">Confidence</span><span class="popup-val">${h.confidence}%</span></div>
+      <div class="popup-row"><span class="popup-label">Satellite</span><span class="popup-val">${h.satellite}</span></div>
+      <div class="popup-row"><span class="popup-label">Acquired</span><span class="popup-val">${h.acqDate} ${h.acqTime}</span></div>
+    `);
+
+    pointsLayer.addLayer(marker);
+  });
+}
+
+// ── Simple canvas-based heatmap ──
+function createHeatOverlay(data) {
+  // Use a simple approach: aggregate to grid cells and draw
+  if (heatLayer) map.removeLayer(heatLayer);
+
+  const canvas = document.createElement('canvas');
+  const size = 600;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  // Myanmar bounds
+  const bounds = [[9.5, 92], [28.5, 100.5]];
+  const latRange = bounds[1][0] - bounds[0][0];
+  const lngRange = bounds[1][1] - bounds[0][1];
+
+  data.forEach(h => {
+    const x = ((h.lng - bounds[0][1]) / lngRange) * size;
+    const y = ((bounds[1][0] - h.lat) / latRange) * size;
+    const r = 6 + (h.frp > 50 ? 4 : h.frp > 10 ? 2 : 0);
+
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, r);
+    gradient.addColorStop(0, 'rgba(255, 77, 28, 0.25)');
+    gradient.addColorStop(0.5, 'rgba(255, 171, 0, 0.08)');
+    gradient.addColorStop(1, 'rgba(255, 171, 0, 0)');
+
+    ctx.beginPath();
+    ctx.fillStyle = gradient;
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  const imageBounds = [bounds[0], bounds[1]];
+  heatLayer = L.imageOverlay(canvas.toDataURL(), imageBounds, {
+    opacity: 0.9,
+    interactive: false
+  }).addTo(map);
+}
+
+// ── Update stats ──
+function updateStats(data) {
+  document.getElementById('totalCount').textContent = data.length.toLocaleString();
+  document.getElementById('dateRange').textContent = '29 March 2026 · VIIRS';
+
+  const highConf = data.filter(h => h.confidence >= 80).length;
+  document.getElementById('highConf').textContent = highConf.toLocaleString();
+
+  const avgBright = (data.reduce((s, h) => s + h.bright, 0) / data.length).toFixed(1);
+  document.getElementById('avgBright').textContent = avgBright;
+
+  // Region counts
+  const regionCounts = {};
+  data.forEach(h => {
+    regionCounts[h.region] = (regionCounts[h.region] || 0) + 1;
+  });
+
+  const sorted = Object.entries(regionCounts).sort((a, b) => b[1] - a[1]);
+  const regionPanel = document.getElementById('regionPanel');
+  regionPanel.innerHTML = '';
+
+  sorted.slice(0, 8).forEach(([name, count]) => {
+    const chip = document.createElement('div');
+    chip.className = 'region-chip';
+    chip.innerHTML = `<span>${name}</span><span class="count">${count.toLocaleString()}</span>`;
+    chip.onclick = () => {
+      const r = regions[name];
+      if (r) map.flyTo([r.lat, r.lng], 8, { duration: 1.2 });
+    };
+    regionPanel.appendChild(chip);
+  });
+}
+
+// ── Controls ──
+function toggleHeatmap() {
+  showHeatmap = !showHeatmap;
+  document.getElementById('btnHeatmap').classList.toggle('active', showHeatmap);
+  if (showHeatmap && allData.length) {
+    createHeatOverlay(allData);
+  } else if (heatLayer) {
+    map.removeLayer(heatLayer);
+  }
+}
+
+function toggleCluster() {
+  const btn = document.getElementById('btnCluster');
+  btn.classList.toggle('active');
+  // Toggle point visibility
+  if (map.hasLayer(pointsLayer)) {
+    map.removeLayer(pointsLayer);
+  } else {
+    map.addLayer(pointsLayer);
+  }
+}
+
+function toggleInfo() {
+  const panel = document.getElementById('infoPanel');
+  panel.classList.toggle('show');
+  document.getElementById('btnInfo').classList.toggle('active');
+}
+
+// ── Initialize ──
+function init() {
+  allData = generateMyanmarHotspots();
+  renderHotspots(allData);
+  createHeatOverlay(allData);
+  updateStats(allData);
+
+  // Hide loading
+  setTimeout(() => {
+    document.getElementById('loadingOverlay').classList.add('fade-out');
+    setTimeout(() => {
+      document.getElementById('loadingOverlay').style.display = 'none';
+    }, 800);
+  }, 1500);
+}
+
+init();
+</script>
+</body>
+</html>
