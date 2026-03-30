@@ -55,14 +55,14 @@ On **29 March 2026**, the Suomi NPP satellite's VIIRS sensor detected **6,863 fi
 - **Color-coded by Fire Radiative Power (FRP)**: yellow (low), amber (medium), orange-red (high), red (extreme)
 - **Scaled marker radius** proportional to fire intensity
 - **leaflet.heat heatmap overlay** with multi-stop gradient (yellow–amber–orange–red–crimson) showing fire density and clustering patterns
-- **Admin Level 1 boundaries** — state/region polygons loaded from `admin1.geojson` with hover tooltips
+- **Admin Level 1 boundaries** — 15 state/region/union territory polygons from MIMU loaded via `admin1.geojson` with hover tooltips
 
 ### Interactive Controls
 - **Heatmap toggle** — enable/disable the thermal density overlay
 - **Point layer toggle** — show/hide individual fire markers
 - **Click-to-inspect** — click any hotspot to see detailed attributes in a styled popup:
   - Geographic coordinates (lat/lng)
-  - State/Region name
+  - State/Region/Union Territory name and type
   - Fire Radiative Power (MW)
   - Brightness temperature (K)
   - Detection confidence (%)
@@ -139,7 +139,7 @@ npx serve .
 ```
 mm-fire-hotspots-20260329/
 ├── index.html          # Main application (single-file, self-contained)
-├── admin1.geojson      # Myanmar state/region boundaries (Admin Level 1)
+├── admin1.geojson      # MIMU Myanmar state/region boundaries (Admin Level 1)
 ├── README.md           # This documentation
 ├── LICENSE             # MIT License
 └── CONTRIBUTING.md     # Contribution guidelines
@@ -160,7 +160,7 @@ External dependencies loaded via CDN:
 - [Google Fonts](https://fonts.google.com/) — JetBrains Mono & DM Sans typefaces
 
 Local data files:
-- `admin1.geojson` — simplified Myanmar Admin Level 1 boundaries (14 states/regions, ~287 KB), sourced from [geoBoundaries](https://www.geoboundaries.org/) (CC BY 4.0)
+- `admin1.geojson` — Myanmar Admin Level 1 boundaries (15 states/regions/union territory, ~724 KB), sourced from [MIMU](https://themimu.info/) (Myanmar Information Management Unit). Properties: `ST` (English name), `ST_PCODE` (place code), `ST_RG` (State/Region/Union Territory), `ST_MMR` (Myanmar-language name)
 
 ---
 
@@ -171,7 +171,7 @@ Local data files:
 The dashboard currently uses **synthetically generated data** that accurately models the reported 6,863 hotspots with:
 
 - **Boundary-constrained placement** — every hotspot is generated within actual state/region polygons from `admin1.geojson` using ray-casting point-in-polygon testing (rejection sampling ensures no points fall outside Myanmar's borders)
-- **Realistic spatial distribution** weighted by Myanmar's 14 states/regions based on known fire patterns (Sagaing 28%, Shan 22%, Mandalay 10%, Kachin/Magway 8% each)
+- **Realistic spatial distribution** weighted by Myanmar's 15 states/regions/union territory based on known fire patterns (Sagaing 27%, Shan 22%, Mandalay 10%, Kachin/Magway 8% each)
 - **Clustered point generation** simulating natural fire clustering behavior (40% of points cluster near existing points within the same region)
 - **Log-normal FRP distribution** matching typical VIIRS fire detections
 - **Realistic attribute ranges** for brightness temperature (300–410 K), confidence (40–100%), and acquisition times across multiple satellite overpasses
@@ -184,6 +184,7 @@ The dashboard currently uses **synthetically generated data** that accurately mo
 | **NASA FIRMS** | Fire Information for Resource Management System | https://firms.modaps.eosdis.nasa.gov/ |
 | **GISTDA Thailand** | Geo-Informatics and Space Technology Development Agency | https://disaster.gistda.or.th/fire |
 | **VIIRS Active Fire** | 375m resolution fire product (VNP14IMG) | https://earthdata.nasa.gov/earth-observation-data/near-real-time/firms/viirs-i-band-375-m-active-fire-data |
+| **MIMU** | Myanmar Information Management Unit — Admin Level 1 boundaries | https://themimu.info/ |
 
 ### Satellite Sensors
 
@@ -334,34 +335,38 @@ The heatmap overlay is generated using the [leaflet.heat](https://github.com/Lea
 ### Administrative Boundaries
 
 `admin1.geojson` serves as the **single source of truth** for all geographic operations:
-- **Source**: geoBoundaries (simplified geometry), CC BY 4.0
-- **Features**: 14 states/regions (Ayeyarwady, Bago, Chin, Kachin, Kayah, Kayin, Magway, Mandalay, Mon, Rakhine, Sagaing, Shan, Tanintharyi, Yangon)
+- **Source**: MIMU (Myanmar Information Management Unit)
+- **Features**: 15 admin units — 7 States (Chin, Kachin, Kayah, Kayin, Mon, Rakhine, Shan), 7 Regions (Ayeyarwady, Bago, Magway, Mandalay, Sagaing, Tanintharyi, Yangon), 1 Union Territory (Nay Pyi Taw)
+- **Properties**: `ST` (English name), `ST_PCODE` (MIMU place code), `ST_RG` (administrative type), `ST_MMR` (Myanmar-language name)
 - **Styling**: `#4a5568` stroke (1.5 px), light fill at 15% opacity
-- **Interaction**: Hover tooltip displays the state/region name
+- **Interaction**: Hover tooltip displays `"{name} {type}"` (e.g., "Sagaing Region", "Chin State", "Nay Pyi Taw Union Territory")
 - **Derived data** (computed at runtime from GeoJSON, not hardcoded):
   - Region centroids (for fly-to navigation)
   - Bounding boxes (for rejection-sampling hotspot placement)
   - Polygon geometry (for point-in-polygon boundary validation)
-  - Region classification (for assigning hotspots to states/regions)
+  - Region classification (for assigning hotspots to admin units)
 
 ### Spatial Data Distribution
 
 Hotspot generation weights by state/region (based on historical fire patterns):
 
-| Region | Weight | Typical Count |
-|--------|--------|---------------|
-| Sagaing | 28% | ~1,922 |
-| Shan | 22% | ~1,510 |
-| Mandalay | 10% | ~686 |
-| Kachin | 8% | ~549 |
-| Magway | 8% | ~549 |
-| Bago | 6% | ~412 |
-| Chin | 5% | ~343 |
-| Kayin | 3% | ~206 |
-| Rakhine | 3% | ~206 |
-| Kayah | 2% | ~137 |
-| Tanintharyi | 2% | ~137 |
-| Others | 3% | ~206 |
+| Admin Unit | Type | Weight | Typical Count |
+|------------|------|--------|---------------|
+| Sagaing | Region | 27% | ~1,853 |
+| Shan | State | 22% | ~1,510 |
+| Mandalay | Region | 10% | ~686 |
+| Kachin | State | 8% | ~549 |
+| Magway | Region | 8% | ~549 |
+| Bago | Region | 6% | ~412 |
+| Chin | State | 5% | ~343 |
+| Kayin | State | 3% | ~206 |
+| Rakhine | State | 3% | ~206 |
+| Kayah | State | 2% | ~137 |
+| Tanintharyi | Region | 2% | ~137 |
+| Nay Pyi Taw | Union Territory | 1% | ~69 |
+| Mon | State | 1% | ~69 |
+| Yangon | Region | 1% | ~69 |
+| Ayeyarwady | Region | 1% | ~69 |
 
 ### Performance
 
@@ -369,8 +374,8 @@ Hotspot generation weights by state/region (based on historical fire patterns):
 - **6,863 circle markers**: rendered via Leaflet's Canvas renderer for optimal performance
 - **Point-in-polygon validation**: ray-casting algorithm with bounding-box pre-rejection for fast spatial testing
 - **leaflet.heat heatmap**: canvas-based rendering with dynamic re-rendering on zoom
-- **Admin boundaries**: ~287 KB GeoJSON fetched once, then reused for boundaries, generation, and classification
-- **Total file size**: ~27 KB HTML + ~287 KB admin1.geojson
+- **Admin boundaries**: ~724 KB MIMU GeoJSON fetched once, then reused for boundaries, generation, and classification
+- **Total file size**: ~27 KB HTML + ~724 KB admin1.geojson
 
 ---
 
@@ -403,7 +408,8 @@ Update the `REGION_WEIGHTS` object to model different fire distribution scenario
 
 ```javascript
 const REGION_WEIGHTS = {
-  'Sagaing': 0.28, 'Shan': 0.22, 'Mandalay': 0.10, 'Kachin': 0.08,
+  'Sagaing': 0.27, 'Shan': 0.22, 'Mandalay': 0.10, 'Kachin': 0.08,
+  'Nay Pyi Taw': 0.01,
   // Adjust weights (must sum to ~1.0)
   // Bounding boxes and polygons are derived automatically from admin1.geojson
 };
@@ -537,7 +543,7 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 - **Leaflet.js** community for the excellent open-source mapping library
 - **leaflet.heat** plugin for heatmap visualization
 - **CartoDB** for Positron light-themed base map tiles
-- **geoBoundaries** for open Admin Level 1 boundary data (CC BY 4.0)
+- **MIMU** (Myanmar Information Management Unit) for official Admin Level 1 boundary data
 - Fire hotspot report data referenced from GISTDA bulletin, 29 March 2026
 
 ---

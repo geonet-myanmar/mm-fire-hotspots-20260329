@@ -469,9 +469,9 @@
   <div class="legend-items">
     <div class="legend-item"><div class="legend-dot" style="background:linear-gradient(90deg,#ffffb2,#fd8d3c,#bd0026);width:60px;border-radius:3px;height:10px"></div> Low → High</div>
   </div>
-  <div class="legend-title" style="margin-top:12px">Boundaries</div>
+  <div class="legend-title" style="margin-top:12px">Admin Boundaries (MIMU)</div>
   <div class="legend-items">
-    <div class="legend-item"><div style="width:24px;height:0;border-top:2px solid #4a5568;flex-shrink:0"></div> State / Region</div>
+    <div class="legend-item"><div style="width:24px;height:0;border-top:2px solid #4a5568;flex-shrink:0"></div> State / Region / Union Territory</div>
   </div>
 </div>
 
@@ -488,7 +488,7 @@
   <div class="info-text">
     Fire hotspots detected by the VIIRS (Visible Infrared Imaging Radiometer Suite) sensor aboard the Suomi NPP and NOAA-20 satellites. Data from NASA FIRMS (Fire Information for Resource Management System). Updated near real-time with detections from the last 24–48 hours.<br><br>
     Based on the 29 March 2026 report, Myanmar recorded 6,863 hotspots — the highest among Southeast Asian nations.<br><br>
-    <span style="color:var(--text-muted)">Source: NASA FIRMS & GISTDA Thailand</span>
+    <span style="color:var(--text-muted)">Source: NASA FIRMS & GISTDA Thailand<br>Boundaries: MIMU (Myanmar Information Management Unit)</span>
   </div>
 </div>
 
@@ -568,11 +568,12 @@ function pointInFeature(lat, lng, feature) {
   return false;
 }
 
-// Extract metadata from each GeoJSON feature: centroid, bounding box, polygon ref
+// Extract metadata from each GeoJSON feature (MIMU schema: ST, ST_PCODE, ST_RG, ST_MMR)
 function extractRegionMeta(geojson) {
   const meta = {};
   geojson.features.forEach(feat => {
-    const name = feat.properties.shapeName;
+    const p = feat.properties;
+    const name = p.ST;
     const coords = [];
     const collectCoords = (geom) => {
       if (geom.type === 'Polygon') {
@@ -592,6 +593,9 @@ function extractRegionMeta(geojson) {
       maxLat: Math.max(...lats),
       minLng: Math.min(...lngs),
       maxLng: Math.max(...lngs),
+      pcode: p.ST_PCODE,
+      type: p.ST_RG,
+      nameMmr: p.ST_MMR,
       feature: feat
     };
   });
@@ -609,12 +613,12 @@ function classifyPoint(lat, lng, regionMeta) {
 }
 
 // ── Generate hotspots constrained to actual admin1 boundaries ──
-// Distribution weights by region (based on historical fire patterns)
+// Distribution weights by state/region (based on historical fire patterns)
 const REGION_WEIGHTS = {
-  'Sagaing': 0.28, 'Shan': 0.22, 'Mandalay': 0.10, 'Kachin': 0.08,
+  'Sagaing': 0.27, 'Shan': 0.22, 'Mandalay': 0.10, 'Kachin': 0.08,
   'Magway': 0.08, 'Bago': 0.06, 'Chin': 0.05, 'Kayin': 0.03,
   'Rakhine': 0.03, 'Kayah': 0.02, 'Tanintharyi': 0.02, 'Mon': 0.01,
-  'Yangon': 0.01, 'Ayeyarwady': 0.01
+  'Nay Pyi Taw': 0.01, 'Yangon': 0.01, 'Ayeyarwady': 0.01
 };
 
 function generateMyanmarHotspots(regionMeta) {
@@ -703,10 +707,12 @@ function renderHotspots(data) {
       opacity: 0.9
     });
 
+    const rm = regionMeta[h.region];
+    const rType = rm ? rm.type : '';
     marker.bindPopup(`
       <div class="popup-title">🔥 Fire Hotspot #${idx + 1}</div>
       <div class="popup-row"><span class="popup-label">Location</span><span class="popup-val">${h.lat}°N, ${h.lng}°E</span></div>
-      <div class="popup-row"><span class="popup-label">Region</span><span class="popup-val">${h.region}</span></div>
+      <div class="popup-row"><span class="popup-label">State/Region</span><span class="popup-val">${h.region} ${rType}</span></div>
       <div class="popup-row"><span class="popup-label">FRP</span><span class="popup-val">${h.frp} MW</span></div>
       <div class="popup-row"><span class="popup-label">Brightness</span><span class="popup-val">${h.bright} K</span></div>
       <div class="popup-row"><span class="popup-label">Confidence</span><span class="popup-val">${h.confidence}%</span></div>
@@ -824,8 +830,9 @@ async function init() {
         opacity: 0.7
       },
       onEachFeature: function(feature, layer) {
-        if (feature.properties && feature.properties.shapeName) {
-          layer.bindTooltip(feature.properties.shapeName, {
+        const p = feature.properties;
+        if (p && p.ST) {
+          layer.bindTooltip(`${p.ST} ${p.ST_RG}`, {
             permanent: false,
             direction: 'center',
             className: 'region-tooltip'
